@@ -1,4 +1,8 @@
 import sqlite3
+from shapely.wkt import loads
+
+#TODO : List of POI with building mask and region of the parcelle and bounding box around the building to fetch sentinel-2 data
+#TODO : Link Eodag to fetch sentinel-2 data around the building automatically ?
 
 # Class to store temporality data
 class temporality():
@@ -77,22 +81,39 @@ class changeFinder():
         """
         before, after = self.get_table()
         num_changes = 0
-        
+        ROI = []
         # Get list of batiment_rid from before and after databases
         before_rids = [t.batiment_rid for t in before]
         after_rids = [t.batiment_rid for t in after]
         
         # Count changes by comparing batiment_rid
-        for a in after_rids:
-            if a not in before_rids:
+        for a in after:
+            if a.batiment_rid not in before_rids:
                 num_changes += 1
-        
+                ROI.append(a)
         # Close database connections
         self.close()
         
         # Print number of changes found
         print(f"Found {num_changes} changes between the two databases.")
-    
+        return self.filter_on_area(ROI)
+
+    def filter_on_area(self, ROI):
+        """
+        Sort ROI on area of the region using a key (we don't have to store the areas in another array as such).
+        We then keep the top 20% of the regions.
+        """
+        ROI.sort(key=lambda x: self.get_r_area(x), reverse=True)
+        length = len(ROI)
+        return ROI[:int(0.2*length)]
+        
+    def get_r_area(self, region):
+        """
+        Get area of a region.
+        """
+        geom = loads(region.geom_parcelle)
+        return geom.area
+
 if __name__ == "__main__":
     # Paths to before and after databases
     db_path_b = "./escalquens_2018.sqlite"
@@ -100,4 +121,6 @@ if __name__ == "__main__":
     
     # Create changeFinder object and find changes
     cf = changeFinder(db_path_b, db_path_a)
-    cf.find_changes()
+    ROI = cf.find_changes()
+    print(f"Keeping {len(ROI)} regions of interest.")
+    
