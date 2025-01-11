@@ -1,7 +1,11 @@
 import sqlite3
+
+import folium
+from lambert import Lambert93, convertToWGS84Deg
+from shapely.geometry import mapping
 from shapely.wkt import loads
 
-#TODO : List of POI with building mask and region of the parcelle and bounding box around the building to fetch sentinel-2 data
+#TODO : #For each bbox create a small grid of the size of the bbox and create a building mask corresponding to the building geometry
 #TODO : Link Eodag to fetch sentinel-2 data around the building automatically ?
 
 # Class to store temporality data
@@ -96,23 +100,125 @@ class changeFinder():
         
         # Print number of changes found
         print(f"Found {num_changes} changes between the two databases.")
-        return self.filter_on_area(ROI)
+        ROI_filtered = self.filter_on_area(ROI)
+
+        return self.merge_on_parcelle(ROI_filtered)
 
     def filter_on_area(self, ROI):
         """
-        Sort ROI on area of the region using a key (we don't have to store the areas in another array as such).
-        We then keep the top 20% of the regions.
+        Sort ROI on area of the building using a key (we don't have to store the areas in another array as such).
+        We then keep the top 20% of the biggest buildings.
         """
-        ROI.sort(key=lambda x: self.get_r_area(x), reverse=True)
+        ROI.sort(key=lambda x: self.get_b_area(x), reverse=True)
         length = len(ROI)
         return ROI[:int(0.2*length)]
         
-    def get_r_area(self, region):
+    def merge_on_parcelle(self, ROI):
         """
-        Get area of a region.
+        Merge regions of interest on the same parcelle.
         """
-        geom = loads(region.geom_parcelle)
+        ROI_dict = {}
+        for r in ROI:
+            if r.parcelle_rid not in ROI_dict:
+                ROI_dict[r.parcelle_rid] = [r]
+            else:
+                ROI_dict[r.parcelle_rid].append(r)
+        return ROI_dict
+
+    def get_b_area(self, region):
+        """
+        Get area of a building.
+        """
+        geom = loads(region.geom_batiment)
         return geom.area
+    
+    def generate_map(self, ROI):
+        """
+        Generate a map with the regions of interest and saves it as map.html.
+        """
+        print(ROI[list(ROI.keys())[0]])
+        centroid = loads(ROI[list(ROI.keys())[0]][0].geom_parcelle).centroid
+        pt = convertToWGS84Deg(centroid.x, centroid.y, Lambert93)
+        m = folium.Map(location=[pt.getY(), pt.getX()], zoom_start=14)
+        for rd in ROI.values():
+            for geom in [rd[0].geom_parcelle]:
+                # Convert Shapely geometry to GeoJSON
+                geojson = mapping(loads(geom))
+                # Convert coordinates from Lambert 93 to WGS84
+                for l, feature in enumerate(geojson['coordinates']):
+                    new_feature = []
+                    for i, polygon in enumerate(feature):
+                        new_feature.append([])
+                        for j, coord in enumerate(polygon):
+                            pt = convertToWGS84Deg(coord[0], coord[1], Lambert93)
+                            new_feature[i].append([pt.getX(), pt.getY()])
+                    geojson['coordinates'][l] = new_feature
+
+                # Add to map with styling
+                folium.GeoJson(
+                    geojson,
+                    style_function=lambda x: {
+                        'fillColor': 'green',
+                        'color': 'green',
+                        'weight': 2,
+                        'fillOpacity': 0.5
+                    }
+                ).add_to(m)
+                
+                # Add bounding box
+                bounds = loads(geom).bounds
+                bbox = [
+                    [bounds[1], bounds[0]],
+                    [bounds[1], bounds[2]],
+                    [bounds[3], bounds[2]],
+                    [bounds[3], bounds[0]],
+                    [bounds[1], bounds[0]]
+                ]
+                print(bbox)
+                bbox_wgs84 = [[convertToWGS84Deg(pt[1], pt[0], Lambert93).getY(), convertToWGS84Deg(pt[1], pt[0], Lambert93).getX()] for pt in bbox]
+                folium.PolyLine(bbox_wgs84, color="yellow", weight=2.5, opacity=1).add_to(m)
+                
+            for r in rd:
+                for geom in [r.geom_batiment]:
+                    # Convert Shapely geometry to GeoJSON
+                    geojson = mapping(loads(geom))
+                    # Convert coordinates from Lambert 93 to WGS84
+                    for l, feature in enumerate(geojson['coordinates']):
+                        new_feature = []
+                        for i, polygon in enumerate(feature):
+                            new_feature.append([])
+                            for j, coord in enumerate(polygon):
+                                pt = convertToWGS84Deg(coord[0], coord[1], Lambert93)
+                                new_feature[i].append([pt.getX(), pt.getY()])
+                        geojson['coordinates'][l] = new_feature
+
+                    # Add to map with styling
+                    folium.GeoJson(
+                        geojson,
+                        style_function=lambda x: {
+                            'fillColor': 'blue',
+                            'color': 'blue',
+                            'weight': 2,
+                            'fillOpacity': 0.5
+                        }
+                    ).add_to(m)
+                    
+                    # Add bounding box
+                    bounds = loads(geom).bounds
+                    bbox = [
+                        [bounds[1], bounds[0]],
+                        [bounds[1], bounds[2]],
+                        [bounds[3], bounds[2]],
+                        [bounds[3], bounds[0]],
+                        [bounds[1], bounds[0]]
+                    ]
+                    bbox_wgs84 = [[convertToWGS84Deg(pt[0], pt[1], Lambert93).getY(), convertToWGS84Deg(pt[0], pt[1], Lambert93).getX()] for pt in bbox]
+                    folium.PolyLine(bbox_wgs84, color="yellow", weight=2.5, opacity=1).add_to(m)
+                    
+        # Save the map to an HTML file and display
+        output_file = "map.html"
+        m.save(output_file)
+        print(f"Map saved as {output_file}. Open this file in a browser to view the geometries.")
 
 if __name__ == "__main__":
     # Paths to before and after databases
@@ -121,6 +227,8 @@ if __name__ == "__main__":
     
     # Create changeFinder object and find changes
     cf = changeFinder(db_path_b, db_path_a)
-    ROI = cf.find_changes()
-    print(f"Keeping {len(ROI)} regions of interest.")
-    
+    ROI_dict = cf.find_changes()
+    print(f"Keeping {len(ROI_dict)} regions of interest.")
+    #Show geometries of the regions of interest on a map
+    #This can be done using folium and mapping
+    cf.generate_map(ROI_dict)
