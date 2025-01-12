@@ -164,20 +164,7 @@ class changeFinder():
                         'fillOpacity': 0.5
                     }
                 ).add_to(m)
-                
-                # Add bounding box
-                bounds = loads(geom).bounds
-                bbox = [
-                    [bounds[1], bounds[0]],
-                    [bounds[1], bounds[2]],
-                    [bounds[3], bounds[2]],
-                    [bounds[3], bounds[0]],
-                    [bounds[1], bounds[0]]
-                ]
-                print(bbox)
-                bbox_wgs84 = [[convertToWGS84Deg(pt[1], pt[0], Lambert93).getY(), convertToWGS84Deg(pt[1], pt[0], Lambert93).getX()] for pt in bbox]
-                folium.PolyLine(bbox_wgs84, color="yellow", weight=2.5, opacity=1).add_to(m)
-                
+
             for r in rd:
                 for geom in [r.geom_batiment]:
                     # Convert Shapely geometry to GeoJSON
@@ -212,7 +199,7 @@ class changeFinder():
                         [bounds[3], bounds[0]],
                         [bounds[1], bounds[0]]
                     ]
-                    bbox_wgs84 = [[convertToWGS84Deg(pt[0], pt[1], Lambert93).getY(), convertToWGS84Deg(pt[0], pt[1], Lambert93).getX()] for pt in bbox]
+                    bbox_wgs84 = [[convertToWGS84Deg(pt[1], pt[0], Lambert93).getY(), convertToWGS84Deg(pt[1], pt[0], Lambert93).getX()] for pt in bbox]
                     folium.PolyLine(bbox_wgs84, color="yellow", weight=2.5, opacity=1).add_to(m)
                     
         # Save the map to an HTML file and display
