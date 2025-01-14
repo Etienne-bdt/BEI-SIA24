@@ -112,7 +112,7 @@ class changeFinder():
         """
         ROI.sort(key=lambda x: self.get_b_area(x), reverse=True)
         length = len(ROI)
-        return ROI[:int(1*length)]
+        return ROI[:int(0.2*length)]
         
     def merge_on_parcelle(self, ROI):
         """
