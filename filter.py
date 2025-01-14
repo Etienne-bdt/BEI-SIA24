@@ -1,13 +1,11 @@
 import sqlite3
-
-import ee
+import eodag.utils
 import folium
 from lambert import Lambert93, convertToWGS84Deg
 from shapely.geometry import mapping
 from shapely.wkt import loads
-
-#TODO : #For each bbox create a small grid of the size of the bbox and create a building mask corresponding to the building geometry
-#TODO : Link Eodag to fetch sentinel-2 data around the building automatically ?
+from eodag import EODataAccessGateway
+import eodag
 
 # Class to store temporality data
 class temporality():
@@ -132,6 +130,7 @@ class changeFinder():
         """
         geom = loads(region.geom_batiment)
         return geom.area
+
     def generate_map(self, ROI):
         """
         Generate a map with the regions of interest and saves it as map.html.
@@ -258,7 +257,7 @@ class changeFinder():
         output_file = "global_map.html"
         m.save(output_file)
         print(f"Global map saved as {output_file}. Open this file in a browser to view the global geometry.")
-        return bbox_wgs84, line,houses
+        return bbox_wgs84, line, houses
 
 if __name__ == "__main__":
     # Paths to before and after databases
@@ -269,52 +268,29 @@ if __name__ == "__main__":
     cf = changeFinder(db_path_b, db_path_a)
     ROI_dict = cf.find_changes()
     print(f"Keeping {len(ROI_dict)} regions of interest.")
-    #Show geometries of the regions of interest on a map
-    #This can be done using folium and mapping
-    cf.generate_map(ROI_dict)
+    # Show geometries of the regions of interest on a map
+    #cf.generate_map(ROI_dict)
     global_geom = cf.global_bound(ROI_dict)
-    bbox,max_bound, houses = cf.get_global_bound(global_geom)
+    bbox, max_bound, houses = cf.get_global_bound(global_geom)
 
-    #Reorganize bbox to swap each latitude and longitude
+    # Reorganize bbox to swap each latitude and longitude
     bbox = [[pt[1], pt[0]] for pt in bbox]
 
+    bbox_wkt = f"POLYGON(({bbox[0][0]} {bbox[0][1]}, {bbox[1][0]} {bbox[1][1]}, {bbox[2][0]} {bbox[2][1]}, {bbox[3][0]} {bbox[3][1]}, {bbox[4][0]} {bbox[4][1]}))"
 
-    # Initialize the Earth Engine module.
-    ee.Initialize(project='beisia2025')
+    from pystac_client import Client
 
-    # Define the bounding box as a polygon geometry.
-    bbox_polygon = ee.Geometry.Polygon(bbox)
-    # Fetch Sentinel-2 data within the bounding box.
-    sentinel2 = ee.ImageCollection('COPERNICUS/S2_HARMONIZED') \
-        .filterBounds(bbox_polygon) \
-        .filterDate('2024-01-01', '2024-12-31') \
-        .sort('CLOUDY_PIXEL_PERCENTAGE', True) \
-        .first()
+    # Initialize the Planetary Computer STAC API
+    catalog = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1")
 
-    # Get the visualization parameters.
-    vis_params = {
-        'min': 0,
-        'max': 3000,
-        'bands': ['B4', 'B3', 'B2']
+    # Define the search criteria
+    search_criteria = {
+        "collections": ["sentinel-2-l2a"],
+        "datetime": "2024-06-01/2024-09-01",
+        "bbox": [bbox[0][1], bbox[0][0], bbox[2][1], bbox[2][0]],
+        "query": {"eo:cloud_cover": {"lt": 3}}
     }
 
-    # Create a folium map centered on the bounding box.
-    center = bbox_polygon.centroid().coordinates().getInfo()
-    m = folium.Map(location=[center[1], center[0]], zoom_start=14)
-
-    # Add the Sentinel-2 image to the map.
-    map_id_dict = ee.Image(sentinel2).getMapId(vis_params)
-    folium.TileLayer(
-        tiles=map_id_dict['tile_fetcher'].url_format,
-        attr='Google Earth Engine',
-        overlay=True,
-        name='Sentinel-2',
-    ).add_to(m)
-
-    max_bound.add_to(m)
-    houses.add_to(m)
-
-    # Save the map to an HTML file and display.
-    output_file = "sentinel2_map.html"
-    m.save(output_file)
-    print(f"Sentinel-2 map saved as {output_file}. Open this file in a browser to view the data.")
+    # Search for Sentinel-2 data
+    search = catalog.search(**search_criteria)
+    items = search.item_collection()
