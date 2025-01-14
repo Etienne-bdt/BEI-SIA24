@@ -1,5 +1,6 @@
 import sqlite3
 
+import ee
 import folium
 from lambert import Lambert93, convertToWGS84Deg
 from shapely.geometry import mapping
@@ -92,7 +93,7 @@ class changeFinder():
         
         # Count changes by comparing batiment_rid
         for a in after:
-            if a.batiment_rid not in before_rids:
+            if a.batiment_rid not in before_rids and a.geom_batiment is not None and a.geom_parcelle is not None:
                 num_changes += 1
                 ROI.append(a)
         # Close database connections
@@ -111,7 +112,7 @@ class changeFinder():
         """
         ROI.sort(key=lambda x: self.get_b_area(x), reverse=True)
         length = len(ROI)
-        return ROI[:int(0.2*length)]
+        return ROI[:int(1*length)]
         
     def merge_on_parcelle(self, ROI):
         """
@@ -131,12 +132,10 @@ class changeFinder():
         """
         geom = loads(region.geom_batiment)
         return geom.area
-    
     def generate_map(self, ROI):
         """
         Generate a map with the regions of interest and saves it as map.html.
         """
-        print(ROI[list(ROI.keys())[0]])
         centroid = loads(ROI[list(ROI.keys())[0]][0].geom_parcelle).centroid
         pt = convertToWGS84Deg(centroid.x, centroid.y, Lambert93)
         m = folium.Map(location=[pt.getY(), pt.getX()], zoom_start=14)
@@ -190,14 +189,14 @@ class changeFinder():
                         }
                     ).add_to(m)
                     
-                    # Add bounding box
-                    bounds = loads(geom).bounds
+                    # Add bounding box with -50m and +50m in all directions
+                    centroid = loads(geom).centroid
                     bbox = [
-                        [bounds[1], bounds[0]],
-                        [bounds[1], bounds[2]],
-                        [bounds[3], bounds[2]],
-                        [bounds[3], bounds[0]],
-                        [bounds[1], bounds[0]]
+                        [centroid.y - 160, centroid.x - 160],
+                        [centroid.y - 160, centroid.x + 160],
+                        [centroid.y + 160, centroid.x + 160],
+                        [centroid.y + 160, centroid.x - 160],
+                        [centroid.y - 160, centroid.x - 160]
                     ]
                     bbox_wgs84 = [[convertToWGS84Deg(pt[1], pt[0], Lambert93).getY(), convertToWGS84Deg(pt[1], pt[0], Lambert93).getX()] for pt in bbox]
                     folium.PolyLine(bbox_wgs84, color="yellow", weight=2.5, opacity=1).add_to(m)
@@ -207,10 +206,64 @@ class changeFinder():
         m.save(output_file)
         print(f"Map saved as {output_file}. Open this file in a browser to view the geometries.")
 
+    def global_bound(self, ROI):
+        global_geom = None
+        for rd in ROI.values():
+            for r in rd: 
+                geom = loads(r.geom_batiment)
+                global_geom = geom if global_geom is None else global_geom.union(geom)
+        return global_geom
+
+    def get_global_bound(self, global_geom):
+        # Generate a map with the global geometry bound and save it as global_map.html
+        centroid = global_geom.centroid
+        pt = convertToWGS84Deg(centroid.x, centroid.y, Lambert93)
+        m = folium.Map(location=[pt.getY(), pt.getX()], zoom_start=14)
+        # Convert Shapely geometry to GeoJSON
+        geojson = mapping(global_geom)
+        # Convert coordinates from Lambert 93 to WGS84
+        for l, feature in enumerate(geojson['coordinates']):
+            new_feature = []
+            for i, polygon in enumerate(feature):
+                new_feature.append([])
+                for j, coord in enumerate(polygon):
+                    pt = convertToWGS84Deg(coord[0], coord[1], Lambert93)
+                    new_feature[i].append([pt.getX(), pt.getY()])
+            geojson['coordinates'][l] = new_feature
+
+        # Add to map with styling
+        houses = folium.GeoJson(
+            geojson,
+            style_function=lambda x: {
+                'fillColor': 'red',
+                'color': 'red',
+                'weight': 2,
+                'fillOpacity': 0.5
+            }
+        ).add_to(m)
+
+        # Add bounding box with -50m and +50m in all directions
+        bounds = global_geom.bounds
+        bbox = [
+            [bounds[1] - 100, bounds[0] - 100],
+            [bounds[1] - 100, bounds[2] + 100],
+            [bounds[3] + 100, bounds[2] + 100],
+            [bounds[3] + 100, bounds[0] - 100],
+            [bounds[1] - 100, bounds[0] - 100]
+        ]
+        bbox_wgs84 = [[convertToWGS84Deg(pt[1], pt[0], Lambert93).getY(), convertToWGS84Deg(pt[1], pt[0], Lambert93).getX()] for pt in bbox]
+        line = folium.PolyLine(bbox_wgs84, color="yellow", weight=2.5, opacity=1).add_to(m)
+
+        # Save the map to an HTML file and display
+        output_file = "global_map.html"
+        m.save(output_file)
+        print(f"Global map saved as {output_file}. Open this file in a browser to view the global geometry.")
+        return bbox_wgs84, line,houses
+
 if __name__ == "__main__":
     # Paths to before and after databases
-    db_path_b = "./escalquens_2018.sqlite"
-    db_path_a = "./escalquens_2024.sqlite"
+    db_path_b = "./palaiseau_2018.sqlite"
+    db_path_a = "./palaiseau_2024.sqlite"
     
     # Create changeFinder object and find changes
     cf = changeFinder(db_path_b, db_path_a)
@@ -219,3 +272,49 @@ if __name__ == "__main__":
     #Show geometries of the regions of interest on a map
     #This can be done using folium and mapping
     cf.generate_map(ROI_dict)
+    global_geom = cf.global_bound(ROI_dict)
+    bbox,max_bound, houses = cf.get_global_bound(global_geom)
+
+    #Reorganize bbox to swap each latitude and longitude
+    bbox = [[pt[1], pt[0]] for pt in bbox]
+
+
+    # Initialize the Earth Engine module.
+    ee.Initialize(project='beisia2025')
+
+    # Define the bounding box as a polygon geometry.
+    bbox_polygon = ee.Geometry.Polygon(bbox)
+    # Fetch Sentinel-2 data within the bounding box.
+    sentinel2 = ee.ImageCollection('COPERNICUS/S2_HARMONIZED') \
+        .filterBounds(bbox_polygon) \
+        .filterDate('2024-01-01', '2024-12-31') \
+        .sort('CLOUDY_PIXEL_PERCENTAGE', True) \
+        .first()
+
+    # Get the visualization parameters.
+    vis_params = {
+        'min': 0,
+        'max': 3000,
+        'bands': ['B4', 'B3', 'B2']
+    }
+
+    # Create a folium map centered on the bounding box.
+    center = bbox_polygon.centroid().coordinates().getInfo()
+    m = folium.Map(location=[center[1], center[0]], zoom_start=14)
+
+    # Add the Sentinel-2 image to the map.
+    map_id_dict = ee.Image(sentinel2).getMapId(vis_params)
+    folium.TileLayer(
+        tiles=map_id_dict['tile_fetcher'].url_format,
+        attr='Google Earth Engine',
+        overlay=True,
+        name='Sentinel-2',
+    ).add_to(m)
+
+    max_bound.add_to(m)
+    houses.add_to(m)
+
+    # Save the map to an HTML file and display.
+    output_file = "sentinel2_map.html"
+    m.save(output_file)
+    print(f"Sentinel-2 map saved as {output_file}. Open this file in a browser to view the data.")
