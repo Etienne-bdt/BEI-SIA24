@@ -24,7 +24,32 @@ class temporality():
 # Class to find changes between before and after databases
 class changeFinder():
     """
-    Class to find changes between before and after databases.
+    Attributes:
+    _conn_b (sqlite3.Connection): Connection to the before database.
+    _cursor_b (sqlite3.Cursor): Cursor for the before database.
+    _conn_a (sqlite3.Connection): Connection to the after database.
+    _cursor_a (sqlite3.Cursor): Cursor for the after database.
+    Methods:
+    __init__(db_path_b, db_path_a):
+        Initializes the changeFinder with paths to the before and after databases.
+    get_table():
+        Retrieves relevant columns from the databases and returns temporality objects for both databases.
+    close():
+        Closes the database connections.
+    find_changes():
+        Finds changes between the two databases and returns merged regions of interest.
+    filter_on_area(ROI):
+        Sorts regions of interest based on the area of the building and keeps the top 20% of the biggest buildings.
+    merge_on_parcelle(ROI):
+        Merges regions of interest on the same parcelle and returns a dictionary of merged regions.
+    get_b_area(region):
+        Calculates and returns the area of a building.
+    generate_map(ROI):
+        Generates a map with the regions of interest and saves it as map.html.
+    global_bound(ROI):
+        Calculates and returns the global geometry bound of all regions of interest.
+    get_global_bound(global_geom):
+        Generates a map with the global geometry bound and saves it as global_map.html.
     """
     def __init__(self, db_path_b, db_path_a):
         # Connect to the before database
@@ -116,7 +141,7 @@ class changeFinder():
         """
         ROI.sort(key=lambda x: self.get_b_area(x), reverse=True)
         length = len(ROI)
-        return ROI[:int(0.2*length)]
+        return ROI[:int(0.1*length)]
         
     def merge_on_parcelle(self, ROI):
         """
