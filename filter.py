@@ -4,6 +4,7 @@ import sqlite3
 import folium
 import planetary_computer
 import rasterio
+import rasterio.features
 import requests
 from lambert import Lambert93, convertToWGS84Deg
 from pyproj import Transformer
@@ -11,6 +12,7 @@ from pystac_client import Client
 from rasterio.mask import mask
 from shapely.geometry import mapping
 from shapely.wkt import loads
+import numpy as np
 
 
 # Class to store temporality data
@@ -326,18 +328,46 @@ if __name__ == "__main__":
 
     item = next(items)
 
-    asset_url = item.assets["visual"].href     
+    # Define band URLs
+    band_urls = {
+        "red": item.assets["B04"].href,
+        "green": item.assets["B03"].href,
+        "blue": item.assets["B02"].href,
+        "nir": item.assets["B08"].href
+    }
 
+    # Download and read bands into memory
+    bands = {}
+    
+    if not os.path.exists("./data"):
+        os.makedirs("./data")
 
-    output_path = os.path.join("./data/", f"{item.id}_visual.tif")
-    if not os.path.exists(output_path):
-        response = requests.get(asset_url, stream=True)
-        with open(output_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                f.write(chunk)
-        print(f"Downloaded {output_path}")
+    if not os.path.exists(f'./data/{item.id}_RGBNIR.tif'):
+        for band, url in band_urls.items():
+            print(f"Downloading {band} band ...")
+            response = requests.get(url, stream=True)
+            with rasterio.MemoryFile(response.content) as memfile:
+                with memfile.open() as src:
+                    bands[band] = src.read(1)
+
+        # Stack bands into a single array
+        stacked_array = np.stack([bands["red"], bands["green"], bands["blue"], bands["nir"]], axis=0)
+
+        # Update metadata
+        out_meta = src.meta.copy()
+        out_meta.update({
+            "count": 4,
+            "dtype": stacked_array.dtype
+        })
+        print("Saving RGB+NIR image ...")
+        output_path = os.path.join("./data/", f"{item.id}_RGBNIR.tif")
+        with rasterio.open(output_path, "w", **out_meta) as dest:
+            dest.write(stacked_array)
     else:
-        print(f"{output_path} already exists. Skipping download.")
+        output_path = os.path.join("./data/", f"{item.id}_RGBNIR.tif")
+        print(f"RGB+NIR image already exists at {output_path}")
+
+    print(f"RGB+NIR image saved as {output_path}")
 
     #Convert bbox to EPSG:32631
     
@@ -365,3 +395,34 @@ if __name__ == "__main__":
         dest.write(out_image)
 
     print(f"Cropped image saved as {output_cropped_path}")
+
+    #Rasterize houses geometry
+    # Convert houses GeoJSON to the correct coordinate system (EPSG:32631)
+    houses_32631 = []
+    for feature in houses.data['features']:
+        geom = feature['geometry']
+        new_coords = []
+        for polygon in geom['coordinates']:
+            new_polygon = []
+            for coord in polygon[0]:
+                x, y = transformer.transform(coord[1], coord[0])
+                new_polygon.append([x, y])
+            new_coords.append([new_polygon])
+        geom['coordinates'] = new_coords
+        houses_32631.append((geom, 1))
+        # Rasterize houses geometry
+        house_mask = rasterio.features.rasterize(
+            houses_32631,
+            out_shape=out_image.shape[1:3],
+            transform=out_transform,
+            fill=0,
+            all_touched=True,
+            dtype=np.uint8
+        )
+        
+        mask_path = os.path.join("./data/", f"houses_mask.tif")
+        mask_meta = out_meta.copy()
+        mask_meta.update(count=1, dtype=rasterio.float32, width=out_image.shape[2], height=out_image.shape[1])
+
+        with rasterio.open(mask_path, "w", **mask_meta) as dest:
+            dest.write(house_mask, 1)
