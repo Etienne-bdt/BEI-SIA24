@@ -292,6 +292,132 @@ class changeFinder():
         print(f"Global map saved as {output_file}. Open this file in a browser to view the global geometry.")
         return bbox_wgs84, line, houses, bbox
 
+    def get_cropped_map(self, ROI_dict):
+        global_geom = self.global_bound(ROI_dict)
+        bbox, max_bound, houses ,bbox_lambert= self.get_global_bound(global_geom)
+
+            # Reorganize bbox to swap each latitude and longitude
+        bbox = [[pt[1], pt[0]] for pt in bbox]
+
+
+        # Initialize the Copernicus Open Access Hub STAC API
+        catalog = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1", modifier=planetary_computer.sign_inplace)    
+
+        # Define the search criteria
+        search_criteria = {
+            "collections": ["sentinel-2-l2a"],
+            "datetime": "2024-01-01/2024-12-31",
+            "bbox": [bbox[0][0], bbox[0][1],bbox[2][0],bbox[2][1]],
+            "query": {"eo:cloud_cover": {"lt": 10}}
+        }
+
+        # Search for Sentinel-2 data
+        search = catalog.search(**search_criteria)
+        items = search.items()
+
+        item = next(items)
+
+        # Define band URLs
+        band_urls = {
+            "red": item.assets["B04"].href,
+            "green": item.assets["B03"].href,
+            "blue": item.assets["B02"].href,
+            "nir": item.assets["B08"].href
+        }
+
+        # Download and read bands into memory
+        bands = {}
+        
+        if not os.path.exists("./data"):
+            os.makedirs("./data")
+
+        if not os.path.exists(f'./data/{item.id}_RGBNIR.tif'):
+            for band, url in band_urls.items():
+                print(f"Downloading {band} band ...")
+                response = requests.get(url, stream=True)
+                with rasterio.MemoryFile(response.content) as memfile:
+                    with memfile.open() as src:
+                        bands[band] = src.read(1)
+
+            # Stack bands into a single array
+            stacked_array = np.stack([bands["red"], bands["green"], bands["blue"], bands["nir"]], axis=0)
+
+            # Update metadata
+            out_meta = src.meta.copy()
+            out_meta.update({
+                "count": 4,
+                "dtype": stacked_array.dtype
+            })
+            print("Saving RGB+NIR image ...")
+            output_path = os.path.join("./data/", f"{item.id}_RGBNIR.tif")
+            with rasterio.open(output_path, "w", **out_meta) as dest:
+                dest.write(stacked_array)
+        else:
+            output_path = os.path.join("./data/", f"{item.id}_RGBNIR.tif")
+            print(f"RGB+NIR image already exists at {output_path}")
+
+        print(f"RGB+NIR image saved as {output_path}")
+
+        #Convert bbox to EPSG:32631
+        
+        transformer = Transformer.from_crs("EPSG:4326", "EPSG:32631")
+        bbox_32631 = [transformer.transform(pt[1], pt[0]) for pt in bbox]  
+
+        bbox_wkt = f"POLYGON(({bbox_32631[0][0]} {bbox_32631[0][1]},{bbox_32631[1][0]} {bbox_32631[1][1]},{bbox_32631[2][0]} {bbox_32631[2][1]},{bbox_32631[3][0]} {bbox_32631[3][1]},{bbox_32631[0][0]} {bbox_32631[0][1]}))"
+
+        print("Bounding box in {}:".format(bbox_wkt))
+
+        with rasterio.open(output_path) as src:
+            #Print src coordinates
+            print(src.bounds)
+            out_image, out_transform = mask(src, [mapping(loads(bbox_wkt))], crop=True)
+            out_meta = src.meta.copy()
+        out_meta.update({
+            "driver": "GTiff",
+            "height": out_image.shape[1],
+            "width": out_image.shape[2],
+            "transform": out_transform
+        })
+
+        output_cropped_path = os.path.join("./data/", f"{item.id}_visual_cropped.tif")
+        with rasterio.open(output_cropped_path, "w", **out_meta) as dest:
+            dest.write(out_image)
+
+        print(f"Cropped image saved as {output_cropped_path}")
+
+        #Rasterize houses geometry
+        # Convert houses GeoJSON to the correct coordinate system (EPSG:32631)
+        houses_32631 = []
+        for feature in houses.data['features']:
+            geom = feature['geometry']
+            new_coords = []
+            for polygon in geom['coordinates']:
+                new_polygon = []
+                for coord in polygon[0]:
+                    x, y = transformer.transform(coord[1], coord[0])
+                    new_polygon.append([x, y])
+                new_coords.append([new_polygon])
+            geom['coordinates'] = new_coords
+            houses_32631.append((geom, 1))
+            # Rasterize houses geometry
+            house_mask = rasterio.features.rasterize(
+                houses_32631,
+                out_shape=out_image.shape[1:3],
+                transform=out_transform,
+                fill=0,
+                all_touched=True,
+                dtype=np.uint8
+            )
+            
+            mask_path = os.path.join("./data/", f"houses_mask.tif")
+            mask_meta = out_meta.copy()
+            mask_meta.update(count=1, dtype=rasterio.float32, width=out_image.shape[2], height=out_image.shape[1])
+
+            with rasterio.open(mask_path, "w", **mask_meta) as dest:
+                dest.write(house_mask, 1)
+
+        print(f"House mask saved as {mask_path}")
+
 if __name__ == "__main__":
     # Paths to before and after databases
     db_path_b = "./palaiseau_2018.sqlite"
@@ -303,126 +429,7 @@ if __name__ == "__main__":
     print(f"Keeping {len(ROI_dict)} regions of interest.")
     # Show geometries of the regions of interest on a map
     #cf.generate_map(ROI_dict)
-    global_geom = cf.global_bound(ROI_dict)
-    bbox, max_bound, houses,bbox_lambert = cf.get_global_bound(global_geom)
-
-
-    # Reorganize bbox to swap each latitude and longitude
-    bbox = [[pt[1], pt[0]] for pt in bbox]
-
-
-    # Initialize the Copernicus Open Access Hub STAC API
-    catalog = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1", modifier=planetary_computer.sign_inplace)    
-
-    # Define the search criteria
-    search_criteria = {
-        "collections": ["sentinel-2-l2a"],
-        "datetime": "2024-01-01/2024-12-31",
-        "bbox": [bbox[0][0], bbox[0][1],bbox[2][0],bbox[2][1]],
-        "query": {"eo:cloud_cover": {"lt": 10}}
-    }
-
-    # Search for Sentinel-2 data
-    search = catalog.search(**search_criteria)
-    items = search.items()
-
-    item = next(items)
-
-    # Define band URLs
-    band_urls = {
-        "red": item.assets["B04"].href,
-        "green": item.assets["B03"].href,
-        "blue": item.assets["B02"].href,
-        "nir": item.assets["B08"].href
-    }
-
-    # Download and read bands into memory
-    bands = {}
+    cf.get_cropped_map(ROI_dict)
     
-    if not os.path.exists("./data"):
-        os.makedirs("./data")
 
-    if not os.path.exists(f'./data/{item.id}_RGBNIR.tif'):
-        for band, url in band_urls.items():
-            print(f"Downloading {band} band ...")
-            response = requests.get(url, stream=True)
-            with rasterio.MemoryFile(response.content) as memfile:
-                with memfile.open() as src:
-                    bands[band] = src.read(1)
-
-        # Stack bands into a single array
-        stacked_array = np.stack([bands["red"], bands["green"], bands["blue"], bands["nir"]], axis=0)
-
-        # Update metadata
-        out_meta = src.meta.copy()
-        out_meta.update({
-            "count": 4,
-            "dtype": stacked_array.dtype
-        })
-        print("Saving RGB+NIR image ...")
-        output_path = os.path.join("./data/", f"{item.id}_RGBNIR.tif")
-        with rasterio.open(output_path, "w", **out_meta) as dest:
-            dest.write(stacked_array)
-    else:
-        output_path = os.path.join("./data/", f"{item.id}_RGBNIR.tif")
-        print(f"RGB+NIR image already exists at {output_path}")
-
-    print(f"RGB+NIR image saved as {output_path}")
-
-    #Convert bbox to EPSG:32631
     
-    transformer = Transformer.from_crs("EPSG:4326", "EPSG:32631")
-    bbox_32631 = [transformer.transform(pt[1], pt[0]) for pt in bbox]  
-
-    bbox_wkt = f"POLYGON(({bbox_32631[0][0]} {bbox_32631[0][1]},{bbox_32631[1][0]} {bbox_32631[1][1]},{bbox_32631[2][0]} {bbox_32631[2][1]},{bbox_32631[3][0]} {bbox_32631[3][1]},{bbox_32631[0][0]} {bbox_32631[0][1]}))"
-
-    print("Bounding box in {}:".format(bbox_wkt))
-
-    with rasterio.open(output_path) as src:
-        #Print src coordinates
-        print(src.bounds)
-        out_image, out_transform = mask(src, [mapping(loads(bbox_wkt))], crop=True)
-        out_meta = src.meta.copy()
-    out_meta.update({
-        "driver": "GTiff",
-        "height": out_image.shape[1],
-        "width": out_image.shape[2],
-        "transform": out_transform
-    })
-
-    output_cropped_path = os.path.join("./data/", f"{item.id}_visual_cropped.tif")
-    with rasterio.open(output_cropped_path, "w", **out_meta) as dest:
-        dest.write(out_image)
-
-    print(f"Cropped image saved as {output_cropped_path}")
-
-    #Rasterize houses geometry
-    # Convert houses GeoJSON to the correct coordinate system (EPSG:32631)
-    houses_32631 = []
-    for feature in houses.data['features']:
-        geom = feature['geometry']
-        new_coords = []
-        for polygon in geom['coordinates']:
-            new_polygon = []
-            for coord in polygon[0]:
-                x, y = transformer.transform(coord[1], coord[0])
-                new_polygon.append([x, y])
-            new_coords.append([new_polygon])
-        geom['coordinates'] = new_coords
-        houses_32631.append((geom, 1))
-        # Rasterize houses geometry
-        house_mask = rasterio.features.rasterize(
-            houses_32631,
-            out_shape=out_image.shape[1:3],
-            transform=out_transform,
-            fill=0,
-            all_touched=True,
-            dtype=np.uint8
-        )
-        
-        mask_path = os.path.join("./data/", f"houses_mask.tif")
-        mask_meta = out_meta.copy()
-        mask_meta.update(count=1, dtype=rasterio.float32, width=out_image.shape[2], height=out_image.shape[1])
-
-        with rasterio.open(mask_path, "w", **mask_meta) as dest:
-            dest.write(house_mask, 1)
