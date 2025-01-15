@@ -1,11 +1,17 @@
+import os
 import sqlite3
-import eodag.utils
+
 import folium
+import planetary_computer
+import rasterio
+import requests
 from lambert import Lambert93, convertToWGS84Deg
+from pyproj import Transformer
+from pystac_client import Client
+from rasterio.mask import mask
 from shapely.geometry import mapping
 from shapely.wkt import loads
-from eodag import EODataAccessGateway
-import eodag
+
 
 # Class to store temporality data
 class temporality():
@@ -257,7 +263,7 @@ class changeFinder():
         output_file = "global_map.html"
         m.save(output_file)
         print(f"Global map saved as {output_file}. Open this file in a browser to view the global geometry.")
-        return bbox_wgs84, line, houses
+        return bbox_wgs84, line, houses, bbox
 
 if __name__ == "__main__":
     # Paths to before and after databases
@@ -271,26 +277,66 @@ if __name__ == "__main__":
     # Show geometries of the regions of interest on a map
     #cf.generate_map(ROI_dict)
     global_geom = cf.global_bound(ROI_dict)
-    bbox, max_bound, houses = cf.get_global_bound(global_geom)
+    bbox, max_bound, houses,bbox_lambert = cf.get_global_bound(global_geom)
+
 
     # Reorganize bbox to swap each latitude and longitude
     bbox = [[pt[1], pt[0]] for pt in bbox]
 
-    bbox_wkt = f"POLYGON(({bbox[0][0]} {bbox[0][1]}, {bbox[1][0]} {bbox[1][1]}, {bbox[2][0]} {bbox[2][1]}, {bbox[3][0]} {bbox[3][1]}, {bbox[4][0]} {bbox[4][1]}))"
 
-    from pystac_client import Client
-
-    # Initialize the Planetary Computer STAC API
-    catalog = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1")
+    # Initialize the Copernicus Open Access Hub STAC API
+    catalog = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1", modifier=planetary_computer.sign_inplace)    
 
     # Define the search criteria
     search_criteria = {
         "collections": ["sentinel-2-l2a"],
-        "datetime": "2024-06-01/2024-09-01",
-        "bbox": [bbox[0][1], bbox[0][0], bbox[2][1], bbox[2][0]],
-        "query": {"eo:cloud_cover": {"lt": 3}}
+        "datetime": "2024-01-01/2024-12-31",
+        "bbox": [bbox[0][0], bbox[0][1],bbox[2][0],bbox[2][1]],
+        "query": {"eo:cloud_cover": {"lt": 10}}
     }
 
     # Search for Sentinel-2 data
     search = catalog.search(**search_criteria)
-    items = search.item_collection()
+    items = search.items()
+
+    item = next(items)
+
+    asset_url = item.assets["visual"].href     
+
+
+    output_path = os.path.join("./data/", f"{item.id}_visual.tif")
+    if not os.path.exists(output_path):
+        response = requests.get(asset_url, stream=True)
+        with open(output_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                f.write(chunk)
+        print(f"Downloaded {output_path}")
+    else:
+        print(f"{output_path} already exists. Skipping download.")
+
+    #Convert bbox to EPSG:32631
+    
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:32631")
+    bbox_32631 = [transformer.transform(pt[1], pt[0]) for pt in bbox]  
+
+    bbox_wkt = f"POLYGON(({bbox_32631[0][0]} {bbox_32631[0][1]},{bbox_32631[1][0]} {bbox_32631[1][1]},{bbox_32631[2][0]} {bbox_32631[2][1]},{bbox_32631[3][0]} {bbox_32631[3][1]},{bbox_32631[0][0]} {bbox_32631[0][1]}))"
+
+    print("Bounding box in {}:".format(bbox_wkt))
+
+    with rasterio.open(output_path) as src:
+        #Print src coordinates
+        print(src.bounds)
+        out_image, out_transform = mask(src, [mapping(loads(bbox_wkt))], crop=True)
+        out_meta = src.meta.copy()
+    out_meta.update({
+        "driver": "GTiff",
+        "height": out_image.shape[1],
+        "width": out_image.shape[2],
+        "transform": out_transform
+    })
+
+    output_cropped_path = os.path.join("./data/", f"{item.id}_visual_cropped.tif")
+    with rasterio.open(output_cropped_path, "w", **out_meta) as dest:
+        dest.write(out_image)
+
+    print(f"Cropped image saved as {output_cropped_path}")
