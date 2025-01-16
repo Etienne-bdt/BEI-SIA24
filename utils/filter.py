@@ -1,7 +1,9 @@
 import os
 import sqlite3
+from datetime import datetime
 
 import folium
+import numpy as np
 import planetary_computer
 import rasterio
 import rasterio.features
@@ -12,8 +14,6 @@ from pystac_client import Client
 from rasterio.mask import mask
 from shapely.geometry import mapping
 from shapely.wkt import loads
-import numpy as np
-from datetime import datetime
 
 
 # Class to store temporality data
