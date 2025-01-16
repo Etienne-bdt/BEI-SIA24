@@ -13,6 +13,7 @@ from rasterio.mask import mask
 from shapely.geometry import mapping
 from shapely.wkt import loads
 import numpy as np
+from datetime import datetime
 
 
 # Class to store temporality data
@@ -21,7 +22,8 @@ class temporality():
         self.batiment_rid = None
         self.parcelle_rid = None
         self.geom_batiment = None
-        self.geom_parcelle = None        
+        self.geom_parcelle = None
+        self.creat_date = None
 
 # Class to find changes between before and after databases
 class changeFinder():
@@ -76,8 +78,11 @@ class changeFinder():
         """
         before, after = [], []
         # SQL query to get relevant columns
-        query = "SELECT ST_AsText(b.geom) AS batiment_geom,ST_AsText(p.geom) AS parcelle_geom, b.object_rid as batiment_rid, p.object_rid as parcelle_rid FROM geo_batiment AS b JOIN geo_batiment_parcelle AS bp ON b.geo_batiment = bp.geo_batiment JOIN geo_parcelle AS p ON bp.geo_parcelle = p.geo_parcelle;"
-        
+        query = "SELECT ST_AsText(b.geom) AS batiment_geom,ST_AsText(p.geom) AS parcelle_geom, b.object_rid as batiment_rid, p.object_rid as parcelle_rid, b.creat_date as creat_date FROM geo_batiment AS b JOIN geo_batiment_parcelle AS bp ON b.geo_batiment = bp.geo_batiment JOIN geo_parcelle AS p ON bp.geo_parcelle = p.geo_parcelle;"
+        self.insee = self._cursor_a.execute("SELECT lot FROM geo_parcelle LIMIT 1;").fetchone()[0]
+        y1 = self._cursor_b.execute("SELECT annee FROM geo_batiment LIMIT 1;").fetchone()[0]
+        y2 = self._cursor_a.execute("SELECT annee FROM geo_batiment LIMIT 1;").fetchone()[0]
+        self.years = [y1,y2]
         # Execute query on before database
         self._cursor_b.execute(query)
         rows_b = self._cursor_b.fetchall()
@@ -93,6 +98,7 @@ class changeFinder():
             t.batiment_rid = row[2]
             t.geom_batiment = row[0]
             t.geom_parcelle = row[1]
+            t.creat_date = datetime.strptime(row[4], "%Y-%m-%d")
             before.append(t)
         
         # Process rows from after database
@@ -102,6 +108,7 @@ class changeFinder():
             t.batiment_rid = row[2]
             t.geom_batiment = row[0]
             t.geom_parcelle = row[1]
+            t.creat_date = datetime.strptime(row[4], "%Y-%m-%d")
             after.append(t)
         
         return before, after
@@ -120,11 +127,11 @@ class changeFinder():
         ROI = []
         # Get list of batiment_rid from before and after databases
         before_rids = [t.batiment_rid for t in before]
-        after_rids = [t.batiment_rid for t in after]
+        before_geom = [t.geom_batiment for t in before]
         
         # Count changes by comparing batiment_rid
         for a in after:
-            if a.batiment_rid not in before_rids and a.geom_batiment is not None and a.geom_parcelle is not None:
+            if (a.geom_batiment not in before_geom) and (a.geom_batiment is not None) and (a.geom_parcelle is not None) and (a.creat_date > datetime.strptime(self.years[0], "%Y")):
                 num_changes += 1
                 ROI.append(a)
         # Close database connections
@@ -290,11 +297,12 @@ class changeFinder():
         output_file = "global_map.html"
         m.save(output_file)
         print(f"Global map saved as {output_file}. Open this file in a browser to view the global geometry.")
-        return bbox_wgs84, line, houses, bbox
+        self.houses = houses
+        return bbox_wgs84
 
-    def get_cropped_map(self, ROI_dict):
+    def get_cropped_map(self, ROI_dict,year):
         global_geom = self.global_bound(ROI_dict)
-        bbox, max_bound, houses ,bbox_lambert= self.get_global_bound(global_geom)
+        bbox= self.get_global_bound(global_geom)
 
             # Reorganize bbox to swap each latitude and longitude
         bbox = [[pt[1], pt[0]] for pt in bbox]
@@ -306,7 +314,7 @@ class changeFinder():
         # Define the search criteria
         search_criteria = {
             "collections": ["sentinel-2-l2a"],
-            "datetime": "2024-01-01/2024-12-31",
+            "datetime": f"{year}-01-01/{year}-12-31",
             "bbox": [bbox[0][0], bbox[0][1],bbox[2][0],bbox[2][1]],
             "query": {"eo:cloud_cover": {"lt": 10}}
         }
@@ -328,10 +336,10 @@ class changeFinder():
         # Download and read bands into memory
         bands = {}
         
-        if not os.path.exists("./data"):
-            os.makedirs("./data")
+        if not os.path.exists(f"./data/{self.insee}/{year}"):
+            os.makedirs(f"./data/{self.insee}/{year}")
 
-        if not os.path.exists(f'./data/{item.id}_RGBNIR.tif'):
+        if not os.path.exists(f'./data/{self.insee}/{year}/RGBNIR.tif'):
             for band, url in band_urls.items():
                 print(f"Downloading {band} band ...")
                 response = requests.get(url, stream=True)
@@ -349,11 +357,11 @@ class changeFinder():
                 "dtype": stacked_array.dtype
             })
             print("Saving RGB+NIR image ...")
-            output_path = os.path.join("./data/", f"{item.id}_RGBNIR.tif")
+            output_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIR.tif")
             with rasterio.open(output_path, "w", **out_meta) as dest:
                 dest.write(stacked_array)
         else:
-            output_path = os.path.join("./data/", f"{item.id}_RGBNIR.tif")
+            output_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIR.tif")
             print(f"RGB+NIR image already exists at {output_path}")
 
         print(f"RGB+NIR image saved as {output_path}")
@@ -378,16 +386,21 @@ class changeFinder():
             "width": out_image.shape[2],
             "transform": out_transform
         })
+        self.out_image_shape = out_image.shape[1:3]
+        self.out_transform = out_transform
+        self.out_meta = out_meta
 
-        output_cropped_path = os.path.join("./data/", f"{item.id}_visual_cropped.tif")
+        output_cropped_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIR_cropped.tif")
         with rasterio.open(output_cropped_path, "w", **out_meta) as dest:
             dest.write(out_image)
 
         print(f"Cropped image saved as {output_cropped_path}")
 
+    def rasterize_houses(self, houses, out_image_shape, out_transform, out_meta):
         #Rasterize houses geometry
         # Convert houses GeoJSON to the correct coordinate system (EPSG:32631)
         houses_32631 = []
+        transformer = Transformer.from_crs("EPSG:4326", "EPSG:32631")
         for feature in houses.data['features']:
             geom = feature['geometry']
             new_coords = []
@@ -402,16 +415,16 @@ class changeFinder():
             # Rasterize houses geometry
             house_mask = rasterio.features.rasterize(
                 houses_32631,
-                out_shape=out_image.shape[1:3],
+                out_shape=out_image_shape,
                 transform=out_transform,
                 fill=0,
                 all_touched=True,
                 dtype=np.uint8
             )
             
-            mask_path = os.path.join("./data/", f"houses_mask.tif")
+            mask_path = os.path.join(f"./data/{self.insee}", f"houses_mask.tif")
             mask_meta = out_meta.copy()
-            mask_meta.update(count=1, dtype=rasterio.float32, width=out_image.shape[2], height=out_image.shape[1])
+            mask_meta.update(count=1, dtype=rasterio.float32, width=out_image_shape[1], height=out_image_shape[0])
 
             with rasterio.open(mask_path, "w", **mask_meta) as dest:
                 dest.write(house_mask, 1)
@@ -426,10 +439,14 @@ if __name__ == "__main__":
     # Create changeFinder object and find changes
     cf = changeFinder(db_path_b, db_path_a)
     ROI_dict = cf.find_changes()
+
     print(f"Keeping {len(ROI_dict)} regions of interest.")
     # Show geometries of the regions of interest on a map
     #cf.generate_map(ROI_dict)
-    cf.get_cropped_map(ROI_dict)
-    
 
+    #Get map for both years
+    for y in cf.years:
+        cf.get_cropped_map(ROI_dict,y)
+    
+    cf.rasterize_houses(cf.houses, cf.out_image_shape, cf.out_transform, cf.out_meta)
     
