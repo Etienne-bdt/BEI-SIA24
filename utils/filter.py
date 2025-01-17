@@ -394,6 +394,7 @@ class changeFinder():
         with rasterio.open(output_cropped_path, "w", **out_meta) as dest:
             dest.write(out_image)
 
+        self.save_to_numpy(out_image, f"{year}/RGBNIR_cropped")
         print(f"Cropped image saved as {output_cropped_path}")
 
     def rasterize_houses(self, houses, out_image_shape, out_transform, out_meta):
@@ -421,15 +422,20 @@ class changeFinder():
                 all_touched=True,
                 dtype=np.uint8
             )
-            
-            mask_path = os.path.join(f"./data/{self.insee}", f"houses_mask.tif")
-            mask_meta = out_meta.copy()
-            mask_meta.update(count=1, dtype=rasterio.float32, width=out_image_shape[1], height=out_image_shape[0])
+        
+        mask_path = os.path.join(f"./data/{self.insee}", f"houses_mask.tif")
+        mask_meta = out_meta.copy()
+        mask_meta.update(count=1, dtype=rasterio.float32, width=out_image_shape[1], height=out_image_shape[0])
 
-            with rasterio.open(mask_path, "w", **mask_meta) as dest:
-                dest.write(house_mask, 1)
+        with rasterio.open(mask_path, "w", **mask_meta) as dest:
+            dest.write(house_mask, 1)
 
+        self.save_to_numpy(house_mask, "houses_mask")
         print(f"House mask saved as {mask_path}")
+
+    def save_to_numpy(self, raster, name):
+        # Save the raster to a NumPy array
+        np.save(f"./data/{self.insee}/{name}.npy", raster)
 
 if __name__ == "__main__":
     # Paths to before and after databases
