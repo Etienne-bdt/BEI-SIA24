@@ -63,8 +63,8 @@ class CadastreSen2Dataset(Dataset):
         #stack the 3 bands
         be = np.zeros((before.shape[1], before.shape[2], 3))
         af = np.zeros((after.shape[1], after.shape[2], 3))
-        max_before = np.max(before[bands,...])
-        max_after = np.max(after[bands,...])
+        max_before = np.percentile(before[bands,...], 90)
+        max_after = np.percentile(after[bands,...], 90)
         min_before = np.min(before[bands,...])
         min_after = np.min(after[bands,...])
         for i, b in enumerate(bands):
