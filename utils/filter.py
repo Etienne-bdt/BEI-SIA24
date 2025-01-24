@@ -360,15 +360,17 @@ class changeFinder():
             output_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIR.tif")
             with rasterio.open(output_path, "w", **out_meta) as dest:
                 dest.write(stacked_array)
+                self.EPSG = dest.crs.to_epsg()
         else:
             output_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIR.tif")
+            with rasterio.open(output_path) as src:
+                self.EPSG = src.crs.to_epsg()
             print(f"RGB+NIR image already exists at {output_path}")
 
         print(f"RGB+NIR image saved as {output_path}")
 
-        #Convert bbox to EPSG:32631
-        
-        transformer = Transformer.from_crs("EPSG:4326", "EPSG:32631")
+        #Convert bbox to format of TIFF file
+        transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{self.EPSG}")
         bbox_32631 = [transformer.transform(pt[1], pt[0]) for pt in bbox]  
 
         bbox_wkt = f"POLYGON(({bbox_32631[0][0]} {bbox_32631[0][1]},{bbox_32631[1][0]} {bbox_32631[1][1]},{bbox_32631[2][0]} {bbox_32631[2][1]},{bbox_32631[3][0]} {bbox_32631[3][1]},{bbox_32631[0][0]} {bbox_32631[0][1]}))"
@@ -397,11 +399,11 @@ class changeFinder():
         self.save_to_numpy(out_image, f"{year}/RGBNIR_cropped")
         print(f"Cropped image saved as {output_cropped_path}")
 
-    def rasterize_houses(self, houses, out_image_shape, out_transform, out_meta):
+    def rasterize_houses(self, houses, out_image_shape, out_transform, out_meta, EPSG):
         #Rasterize houses geometry
-        # Convert houses GeoJSON to the correct coordinate system (EPSG:32631)
+        # Convert houses GeoJSON to the correct coordinate system
         houses_32631 = []
-        transformer = Transformer.from_crs("EPSG:4326", "EPSG:32631")
+        transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{EPSG}")
         for feature in houses.data['features']:
             geom = feature['geometry']
             new_coords = []
@@ -439,8 +441,8 @@ class changeFinder():
 
 if __name__ == "__main__":
     # Paths to before and after databases
-    db_path_b = "./palaiseau_2018.sqlite"
-    db_path_a = "./palaiseau_2024.sqlite"
+    db_path_b = "./bordeaux_2018.sqlite"
+    db_path_a = "./bordeaux_2024.sqlite"
     
     # Create changeFinder object and find changes
     cf = changeFinder(db_path_b, db_path_a)
@@ -454,5 +456,5 @@ if __name__ == "__main__":
     for y in cf.years:
         cf.get_cropped_map(ROI_dict,y)
     
-    cf.rasterize_houses(cf.houses, cf.out_image_shape, cf.out_transform, cf.out_meta)
+    cf.rasterize_houses(cf.houses, cf.out_image_shape, cf.out_transform, cf.out_meta, cf.EPSG)
     
