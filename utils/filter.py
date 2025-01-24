@@ -14,6 +14,7 @@ from pystac_client import Client
 from rasterio.mask import mask
 from shapely.geometry import mapping
 from shapely.wkt import loads
+from rasterio.enums import Resampling
 
 
 # Class to store temporality data
@@ -56,6 +57,9 @@ class changeFinder():
         Generates a map with the global geometry bound and saves it as global_map.html.
     """
     def __init__(self, db_path_b, db_path_a):
+
+        os.environ['PATH'] += r";C:/OSGeo4W/bin" #ajout pour Antoine à commenter
+
         # Connect to the before database
         self._conn_b = sqlite3.connect(db_path_b)
         self._conn_b.enable_load_extension(True)
@@ -330,7 +334,8 @@ class changeFinder():
             "red": item.assets["B04"].href,
             "green": item.assets["B03"].href,
             "blue": item.assets["B02"].href,
-            "nir": item.assets["B08"].href
+            "nir": item.assets["B08"].href,
+            "swir1": item.assets["B11"].href
         }
 
         # Download and read bands into memory
@@ -346,25 +351,49 @@ class changeFinder():
                 with rasterio.MemoryFile(response.content) as memfile:
                     with memfile.open() as src:
                         bands[band] = src.read(1)
+                        if band == "swir1":
+                            swir1_transform = src.transform  # Save SWIR1 transformation res 20m
+                        if band == "red":
+                            high_res_transform = src.transform # Save red transformation res 10m
+
+            # Upsample swir1 from 20m res to 10m res
+            if "swir1" in bands:
+                high_res_shape = (bands["nir"].shape[0], bands["nir"].shape[1])  # Taille cible (10m)
+                swir1_upsampled = np.empty(high_res_shape, dtype=bands["swir1"].dtype)
+
+                # Reprojection and upsampling
+                rasterio.warp.reproject(
+                    source=bands["swir1"],
+                    destination=swir1_upsampled,
+                    src_transform=swir1_transform,
+                    src_crs=src.crs,
+                    dst_transform=high_res_transform,  # Transform bande red
+                    dst_crs=src.crs,
+                    resampling=Resampling.bilinear
+                )
+                bands["swir1"] = swir1_upsampled
 
             # Stack bands into a single array
-            stacked_array = np.stack([bands["red"], bands["green"], bands["blue"], bands["nir"]], axis=0)
+            stacked_array = np.stack([bands["red"], bands["green"], bands["blue"], bands["nir"], bands["swir1"]], axis=0)
 
             # Update metadata
             out_meta = src.meta.copy()
             out_meta.update({
-                "count": 4,
+                "count": 5,
+                "height": bands["red"].shape[0],  # Hauteur correspondant à 10m
+                "width": bands["red"].shape[1],   # Largeur correspondant à 10m
+                "transform": high_res_transform,  # Transformation des bandes à 10m
                 "dtype": stacked_array.dtype
             })
-            print("Saving RGB+NIR image ...")
-            output_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIR.tif")
+            print("Saving RGB+NIR+SWIR image ...")
+            output_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIRSWIR.tif")
             with rasterio.open(output_path, "w", **out_meta) as dest:
                 dest.write(stacked_array)
         else:
-            output_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIR.tif")
-            print(f"RGB+NIR image already exists at {output_path}")
+            output_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIRSWIR.tif")
+            print(f"RGB+NIR+SWIR image already exists at {output_path}")
 
-        print(f"RGB+NIR image saved as {output_path}")
+        print(f"RGB+NIR+SWIR image saved as {output_path}")
 
         #Convert bbox to EPSG:32631
         
@@ -390,11 +419,11 @@ class changeFinder():
         self.out_transform = out_transform
         self.out_meta = out_meta
 
-        output_cropped_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIR_cropped.tif")
+        output_cropped_path = os.path.join(f"./data/{self.insee}/{year}", f"RGBNIRSWIR_cropped.tif")
         with rasterio.open(output_cropped_path, "w", **out_meta) as dest:
             dest.write(out_image)
 
-        self.save_to_numpy(out_image, f"{year}/RGBNIR_cropped")
+        self.save_to_numpy(out_image, f"{year}/RGBNIRSWIR_cropped")
         print(f"Cropped image saved as {output_cropped_path}")
 
     def rasterize_houses(self, houses, out_image_shape, out_transform, out_meta):
@@ -436,6 +465,46 @@ class changeFinder():
     def save_to_numpy(self, raster, name):
         # Save the raster to a NumPy array
         np.save(f"./data/{self.insee}/{name}.npy", raster)
+    
+    #fonction calcul des indices avec les bandes
+    def calculate_indices(self, input_path, output_path):
+        """
+        Calcule les indices NDVI, NDMI, NDBI, NDWI, et BSI à partir d'une image recadrée.
+        Args:
+            input_path (str): Chemin du fichier TIFF d'entrée contenant les bandes nécessaires.
+            output_path (str): Chemin pour sauvegarder le fichier TIFF avec les indices.
+        """
+        with rasterio.open(input_path) as src:
+            # Lire les bandes nécessaires
+            red = src.read(1).astype('float32')  # Bande rouge
+            green = src.read(2).astype('float32')  # Bande verte
+            blue = src.read(3).astype('float32')  # Bande bleue
+            nir = src.read(4).astype('float32')  # Bande NIR
+            swir1 = src.read(5).astype('float32')  # Bande SWIR1
+            
+            # Calculer les indices en gérant les divisions par zéro
+            ndvi = np.where((nir + red) == 0, 0, (nir - red) / (nir + red))
+            ndmi = np.where((nir + swir1) == 0, 0, (nir - swir1) / (nir + swir1))
+            ndbi = np.where((swir1 + nir) == 0, 0, (swir1 - nir) / (swir1 + nir))
+            ndwi = np.where((green + nir) == 0, 0, (green - nir) / (green + nir))
+            bsi = np.where((swir1 + red + nir + blue) == 0, 0,
+                        ((swir1 + red) - (nir + blue)) / ((swir1 + red) + (nir + blue)))
+
+            # Empiler les indices
+            stacked_indices = np.stack([ndvi, ndmi, ndbi, ndwi, bsi], axis=0)
+
+            # Metadonnées mises à jour
+            out_meta = src.meta.copy()
+            out_meta.update({
+                "count": 5,  # Nombre de bandes
+                "dtype": 'float32'
+            })
+
+            # Sauvegarder les indices dans un nouveau fichier TIFF
+            with rasterio.open(output_path, "w", **out_meta) as dest:
+                dest.write(stacked_indices)
+
+        print(f"Indices sauvegardés dans {output_path}")
 
 if __name__ == "__main__":
     # Paths to before and after databases
@@ -453,6 +522,13 @@ if __name__ == "__main__":
     #Get map for both years
     for y in cf.years:
         cf.get_cropped_map(ROI_dict,y)
+
+        # Chemin d'entrée et de sortie
+        input_tiff = f"./data/{cf.insee}/{y}/RGBNIRSWIR_cropped.tif"
+        output_tiff = f"./data/{cf.insee}/{y}/indices.tif"
+
+        # Calculer et sauvegarder les indices
+        cf.calculate_indices(input_tiff, output_tiff)
     
     cf.rasterize_houses(cf.houses, cf.out_image_shape, cf.out_transform, cf.out_meta)
     
