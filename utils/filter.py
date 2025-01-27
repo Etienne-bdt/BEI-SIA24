@@ -11,10 +11,12 @@ import requests
 from lambert import Lambert93, convertToWGS84Deg
 from pyproj import Transformer
 from pystac_client import Client
+from rasterio.enums import Resampling
 from rasterio.mask import mask
 from shapely.geometry import mapping
 from shapely.wkt import loads
-from rasterio.enums import Resampling
+from shapely import to_wkt, from_geojson
+
 
 # Class to store temporality data
 class temporality():
@@ -127,14 +129,26 @@ class changeFinder():
         ROI = []
         # Get list of batiment_rid from before and after databases
         before_rids = [t.batiment_rid for t in before]
-        before_geom = [t.geom_batiment for t in before]
+        before_geom = [t.geom_batiment for t in before] 
+        # transformer = Transformer.from_crs("EPSG:4326", "EPSG:2154", always_xy=True)
         
-        # Count changes by comparing batiment_rid
         for a in after:
+            #     # Convert Lambert93 to Lambert99 CC50 on the fly and count changes
+            #     geojson = mapping(loads(a.geom_batiment))
+            #     for l, feature in enumerate(geojson['coordinates']):
+            #         new_feature = []
+            #         for i, polygon in enumerate(feature):
+            #             new_feature.append([])
+            #             for j, coord in enumerate(polygon):
+            #                 x, y = transformer.transform(coord[1], coord[0])
+            #                 new_feature[i].append([x, y])
+            #     geojson['coordinates'][l] = new_feature
+            #     #Create MultiPolygon from geojson
+            #     a.geom_batiment = to_wkt(from_geojson('{"type": "MultiPolygon", "coordinates": ' + str(geojson['coordinates']) + '}'))
             if (a.geom_batiment not in before_geom) and (a.geom_batiment is not None) and (a.geom_parcelle is not None) and (a.creat_date > datetime.strptime(self.years[0], "%Y")):
                 num_changes += 1
                 ROI.append(a)
-        # Close database connections
+
         self.close()
         
         # Print number of changes found
@@ -150,7 +164,7 @@ class changeFinder():
         """
         ROI.sort(key=lambda x: self.get_b_area(x), reverse=True)
         length = len(ROI)
-        return ROI[:int(0.2*length)]
+        return ROI[:int(0.1*length)]
         
     def merge_on_parcelle(self, ROI):
         """
@@ -311,6 +325,9 @@ class changeFinder():
         # Initialize the Copernicus Open Access Hub STAC API
         catalog = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1", modifier=planetary_computer.sign_inplace)    
 
+        print(f"Searching for Sentinel-2 data in {year} ...")
+        if year == "2017":
+            year = "2016"
         # Define the search criteria
         search_criteria = {
             "collections": ["sentinel-2-l2a"],
@@ -463,8 +480,8 @@ class changeFinder():
 
 if __name__ == "__main__":
     # Paths to before and after databases
-    db_path_b = "./auzT_2018.sqlite"
-    db_path_a = "./auzT_2024.sqlite"
+    db_path_b = "./rombas_2018.sqlite"
+    db_path_a = "./rombas_2025.sqlite"
     
     # Create changeFinder object and find changes
     cf = changeFinder(db_path_b, db_path_a)
