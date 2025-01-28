@@ -149,11 +149,13 @@ class CadastreSen2Dataset(Dataset):
         if idx >= len(self.data_list):
             raise IndexError("Index out of bounds")
         
-        pb, pa, pm = self.data_list[idx]
+        path = self.data_list[idx]
+        pb = f"{path}_before.npy"
+        pa = f"{path}_after.npy"
+        pm = f"{path}_mask.npy"
         before  = np.load(pb)
         after = np.load(pa)
         house_mask = np.load(pm)
-        print(f"Before: {before.shape}, After: {after.shape}, Mask: {house_mask.shape}")
 
         if self.transform:
             before, after = self.transform(before, after)
@@ -177,8 +179,19 @@ class CadastreSen2Dataset(Dataset):
                     print(f"No numpy patches found in {patch}")
                 else:
                     #We have several patches with _before _after _mask, we need to group those with the same name {i}_{j} as one key in the dict or a list
-                    for p in range(0,len(patches),3):
-                        data_list.append((os.path.join(patch, patches[p+1]), os.path.join(patch, patches[p]), os.path.join(patch, patches[p+2])))
+                    prefixes = list(set([x.split("_")[0]+"_"+x.split("_")[1] for x in patches]))
+                    unique_prefixes = []
+                    for p in prefixes:
+                        if p in unique_prefixes:
+                            continue
+                        else:
+                            before = f"{p}_before.npy"
+                            after = f"{p}_after.npy"
+                            mask = f"{p}_mask.npy"
+                            if before in patches and after in patches and mask in patches:
+                                unique_prefixes.append(os.path.join(patch, p))
+                    data_list.extend(unique_prefixes)
+
             else:
                 print(f"Path {path}/{patches} does not exist")
         self.data_list = data_list
