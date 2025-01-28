@@ -1,9 +1,11 @@
 import os
-
-from torch.utils.data import Dataset
 import pickle
-import numpy as np 
+
+import matplotlib.pyplot as plt
+import numpy as np
 import torchvision.transforms.functional as TVF
+from torch.utils.data import Dataset
+
 
 class CadastreSen2Dataset(Dataset):
     def __init__(self, image_path, transform=None):
@@ -59,38 +61,47 @@ class CadastreSen2Dataset(Dataset):
 
     def plot(self, idx, bands=[1,2,3]):
         before, after, mask = self[idx]
-        import matplotlib.pyplot as plt
-        #stack the 3 bands
-        be = np.zeros((before.shape[1], before.shape[2], 3))
-        af = np.zeros((after.shape[1], after.shape[2], 3))
-        max_before = np.percentile(before[bands,...], 90)
-        max_after = np.percentile(after[bands,...], 90)
-        min_before = np.min(before[bands,...])
-        min_after = np.min(after[bands,...])
-        for i, b in enumerate(bands):
-            be[:,:,i] = (before[b-1]-min_before)/(max_before-min_before)
-            af[:,:,i] = (after[b-1]-min_after)/(max_after-min_after)
         mask = mask[0,...]
         plt.figure()
         plt.subplot(131)
-        plt.imshow(be)
+        plt.imshow(before[bands-np.ones_like(bands),...].transpose(1,2,0))
         plt.colorbar()
         plt.title("Before")
         plt.subplot(132)
-        plt.imshow(af)
+        plt.imshow(after[bands-np.ones_like(bands),...].transpose(1,2,0))
         plt.colorbar()
         plt.title("After")
         plt.subplot(133)
-        plt.imshow(mask)
+        plt.imshow(mask,cmap="gray")
         plt.title("Mask")
         plt.show()
+
+    def create_patches(self, patch_size=64):
+        if not hasattr(self, "data_list"):
+            self.list_data()
+        for key in self.keys:
+            paths = self.data_list.get(key)
+            before  = np.load(os.path.join(self.impath, paths[0]))
+            after = np.load(os.path.join(self.impath, paths[1]))
+            house_mask = np.load(os.path.join(self.impath, f"{key}/houses_mask.npy"))
+            house_mask = house_mask[np.newaxis,...]
+            os.makedirs(os.path.join(self.impath, f"{key}/patches"), exist_ok=True)
+            for i in range(0, before.shape[1], patch_size):
+                for j in range(0, before.shape[2], patch_size):
+                    mask_patch = house_mask[:,i:i+patch_size,j:j+patch_size]
+                    if mask_patch.sum() > 64*64*0.05:
+                        before_patch = before[:,i:i+patch_size,j:j+patch_size]
+                        after_patch = after[:,i:i+patch_size,j:j+patch_size] 
+                        np.save(os.path.join(self.impath, f"{key}/patches/{i}_{j}_before.npy"), before_patch)
+                        np.save(os.path.join(self.impath, f"{key}/patches/{i}_{j}_after.npy"), after_patch)
+                        np.save(os.path.join(self.impath, f"{key}/patches/{i}_{j}_mask.npy"), mask_patch)
 
     def random_crop(self, img1, img2, cm, size):
         x = np.random.randint(0, img1.shape[2]-size)
         y = np.random.randint(0, img1.shape[1]-size)
+        cm = cm[0:1, y:y+size, x:x+size]
         img1 = img1[:,y:y+size, x:x+size]
         img2 = img2[:,y:y+size, x:x+size]
-        cm = cm[0:1, y:y+size, x:x+size]
         return img1, img2, cm
 
     def random_flip(self, img1,img2,cm, chance=0.5):
@@ -107,37 +118,58 @@ class CadastreSen2Dataset(Dataset):
 
         return img1, img2, cm
 
+    def normalize(self, img):
+        quantiles = np.percentile(img, [2, 98])
+        img = np.clip(img, quantiles[0], quantiles[1])
+        img = (img - quantiles[0])/(quantiles[1] - quantiles[0])
+        return img
+    
     def __getitem__(self, idx):
         if not hasattr(self, "data_list"):
             self.list_data()
         if idx >= len(self.data_list):
             raise IndexError("Index out of bounds")
         
-        key = self.keys[idx]
-
-        paths = self.data_list.get(key)
-
-        insee_code = paths[0].split("/")[0]
-
-        before  = np.load(os.path.join(self.impath, paths[0]))
-        after = np.load(os.path.join(self.impath, paths[1]))
-        house_mask = np.load(os.path.join(self.impath, f"{insee_code}/houses_mask.npy"))
-        house_mask = house_mask[np.newaxis,...]
+        pb, pa, pm = self.data_list[idx]
+        before  = np.load(pb)
+        after = np.load(pa)
+        house_mask = np.load(pm)
         print(f"Before: {before.shape}, After: {after.shape}, Mask: {house_mask.shape}")
 
         if self.transform:
             before, after = self.transform(before, after)
 
         #Cropping and flipping randomly
-        before, after, house_mask = self.random_crop(before, after, house_mask, 64)
+        #before, after, house_mask = self.random_crop(before, after, house_mask, 64)
         before, after, house_mask = self.random_flip(before, after, house_mask)
         
         #TODO: Normalize the images using quantiles
         
-        return before, after, house_mask
+        (bn, an) =  (self.normalize(before), self.normalize(after))
+
+        return bn, an, house_mask
+
+    def load_patches(self):
+        data_list = []
+        path_to_check = [x for x in os.listdir(self.impath) if os.path.isdir(os.path.join(self.impath, x)) and x.isnumeric()]
+        for path in path_to_check:
+            patch = os.path.join(self.impath, path, "patches")
+            if os.path.exists(patch):
+                patches = [x for x in os.listdir(patch) if x.endswith(".npy")]
+                if len(patches) == 0:
+                    print(f"No numpy patches found in {patch}")
+                    path_to_check.remove(path)
+                else:
+                    #We have several patches with _before _after _mask, we need to group those with the same name {i}_{j} as one key in the dict or a list
+                    for p in range(0,len(patches),3):
+                        data_list.append((os.path.join(patch, patches[p+1]), os.path.join(patch, patches[p]), os.path.join(patch, patches[p+2])))
+        self.data_list = data_list
 
 
 if __name__ == "__main__":
     ds = CadastreSen2Dataset("data/")
+    #ds.create_patches(64)
+    ds.load_patches()
+    print(len(ds))
     ds.plot(0)
-
+    
