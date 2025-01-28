@@ -326,8 +326,6 @@ class changeFinder():
         catalog = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1", modifier=planetary_computer.sign_inplace)    
 
         print(f"Searching for Sentinel-2 data in {year} ...")
-        if year == "2017":
-            year = "2016"
         # Define the search criteria
         search_criteria = {
             "collections": ["sentinel-2-l2a"],
@@ -480,8 +478,8 @@ class changeFinder():
 
 if __name__ == "__main__":
     # Paths to before and after databases
-    db_path_b = "./rombas_2018.sqlite"
-    db_path_a = "./rombas_2025.sqlite"
+    db_path_b = "./cartoucherie_2018.sqlite"
+    db_path_a = "./cartoucherie_2024.sqlite"
     
     # Create changeFinder object and find changes
     cf = changeFinder(db_path_b, db_path_a)
