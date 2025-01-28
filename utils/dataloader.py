@@ -11,10 +11,9 @@ class CadastreSen2Dataset(Dataset):
     def __init__(self, image_path, transform=None):
         self.impath = image_path
         self.transform = transform
-        self.products = ["RGBNIR_cropped", "houses_mask"]
-        
         #Initialize the data list with the available data
-        self.list_data()
+        #self.list_data()
+        self.load_patches()
 
     def list_data(self):
         """Naming convention will be as follows: 
@@ -186,8 +185,8 @@ class CadastreSen2Dataset(Dataset):
 
 if __name__ == "__main__":
     ds = CadastreSen2Dataset("data/")
-    ds.create_patches(64)
-    ds.load_patches()
+    #ds.create_patches(64)
+    #ds.load_patches()
     print(len(ds))
     ds.plot(2)
     
