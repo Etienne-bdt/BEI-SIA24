@@ -175,11 +175,12 @@ class CadastreSen2Dataset(Dataset):
                 patches = [x for x in os.listdir(patch) if x.endswith(".npy")]
                 if len(patches) == 0:
                     print(f"No numpy patches found in {patch}")
-                    path_to_check.remove(path)
                 else:
                     #We have several patches with _before _after _mask, we need to group those with the same name {i}_{j} as one key in the dict or a list
                     for p in range(0,len(patches),3):
                         data_list.append((os.path.join(patch, patches[p+1]), os.path.join(patch, patches[p]), os.path.join(patch, patches[p+2])))
+            else:
+                print(f"Path {path}/{patches} does not exist")
         self.data_list = data_list
 
 
