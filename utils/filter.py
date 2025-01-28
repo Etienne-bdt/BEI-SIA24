@@ -15,8 +15,6 @@ from rasterio.enums import Resampling
 from rasterio.mask import mask
 from shapely.geometry import mapping
 from shapely.wkt import loads
-from shapely import to_wkt, from_geojson
-
 
 # Class to store temporality data
 class temporality():
@@ -480,8 +478,8 @@ class changeFinder():
 
 if __name__ == "__main__":
     # Paths to before and after databases
-    db_path_b = "./rombas_2018.sqlite"
-    db_path_a = "./rombas_2025.sqlite"
+    db_path_b = "./bordeaux_2018.sqlite"
+    db_path_a = "./bordeaux_2024.sqlite"
     
     # Create changeFinder object and find changes
     cf = changeFinder(db_path_b, db_path_a)
