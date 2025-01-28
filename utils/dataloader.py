@@ -76,6 +76,18 @@ class CadastreSen2Dataset(Dataset):
         plt.title("Mask")
         plt.show()
 
+        plt.figure()
+        plt.subplot(131)
+        plt.imshow(before[5,...], cmap="gray")
+        plt.colorbar()
+        plt.subplot(132)
+        plt.imshow(before[6,...], cmap="gray")
+        plt.colorbar()
+        plt.subplot(133)
+        plt.imshow(before[7,...], cmap="gray")
+        plt.colorbar()
+        plt.show()
+
     def create_patches(self, patch_size=64):
         if not hasattr(self, "data_list"):
             self.list_data()
@@ -83,6 +95,7 @@ class CadastreSen2Dataset(Dataset):
             paths = self.data_list.get(key)
             before  = np.load(os.path.join(self.impath, paths[0]))
             after = np.load(os.path.join(self.impath, paths[1]))
+            (before, after) =  (self.normalize(before), self.normalize(after))
             print(f"Before: {before.shape}, After: {after.shape}")
             print(f"Creating patches for {key}")
             NDVI_before, NDWI_before, NDBI_before, NDMI_before, BSI_before = NDVI(before), NDWI(before), NDBI(before), NDMI(before), BSI(before)
@@ -152,9 +165,7 @@ class CadastreSen2Dataset(Dataset):
         
         #TODO: Normalize the images using quantiles
         
-        (bn, an) =  (self.normalize(before), self.normalize(after))
-
-        return bn, an, house_mask
+        return before, after, house_mask
 
     def load_patches(self):
         data_list = []
@@ -176,7 +187,7 @@ class CadastreSen2Dataset(Dataset):
 if __name__ == "__main__":
     ds = CadastreSen2Dataset("data/")
     ds.create_patches(64)
-    #ds.load_patches()
-    #print(len(ds))
-    #ds.plot(0)
+    ds.load_patches()
+    print(len(ds))
+    ds.plot(2)
     
