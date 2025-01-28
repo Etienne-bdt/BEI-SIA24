@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torchvision.transforms.functional as TVF
 from torch.utils.data import Dataset
-
+from index_calculation import NDVI, NDWI, NDBI, NDMI, BSI
 
 class CadastreSen2Dataset(Dataset):
     def __init__(self, image_path, transform=None):
@@ -83,6 +83,13 @@ class CadastreSen2Dataset(Dataset):
             paths = self.data_list.get(key)
             before  = np.load(os.path.join(self.impath, paths[0]))
             after = np.load(os.path.join(self.impath, paths[1]))
+            print(f"Before: {before.shape}, After: {after.shape}")
+            print(f"Creating patches for {key}")
+            NDVI_before, NDWI_before, NDBI_before, NDMI_before, BSI_before = NDVI(before), NDWI(before), NDBI(before), NDMI(before), BSI(before)
+            NDVI_after, NDWI_after, NDBI_after, NDMI_after, BSI_after = NDVI(after), NDWI(after), NDBI(after), NDMI(after), BSI(after)
+            before = np.concatenate([before, NDVI_before[np.newaxis,...], NDWI_before[np.newaxis,...], NDBI_before[np.newaxis,...], NDMI_before[np.newaxis,...], BSI_before[np.newaxis,...]], axis=0)
+            after = np.concatenate([after, NDVI_after[np.newaxis,...], NDWI_after[np.newaxis,...], NDBI_after[np.newaxis,...], NDMI_after[np.newaxis,...], BSI_after[np.newaxis,...]], axis=0)
+            print(f"Before: {before.shape}, After: {after.shape}")
             house_mask = np.load(os.path.join(self.impath, f"{key}/houses_mask.npy"))
             house_mask = house_mask[np.newaxis,...]
             os.makedirs(os.path.join(self.impath, f"{key}/patches"), exist_ok=True)
@@ -168,8 +175,8 @@ class CadastreSen2Dataset(Dataset):
 
 if __name__ == "__main__":
     ds = CadastreSen2Dataset("data/")
-    #ds.create_patches(64)
-    ds.load_patches()
-    print(len(ds))
-    ds.plot(0)
+    ds.create_patches(64)
+    #ds.load_patches()
+    #print(len(ds))
+    #ds.plot(0)
     
