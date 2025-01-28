@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torchvision.transforms.functional as TVF
 from torch.utils.data import Dataset
-from index_calculation import NDVI, NDWI, NDBI, NDMI, BSI
+from utils.index_calculation import NDVI, NDWI, NDBI, NDMI, BSI
 
 class CadastreSen2Dataset(Dataset):
     def __init__(self, image_path, transform=None):
