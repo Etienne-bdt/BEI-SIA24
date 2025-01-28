@@ -324,8 +324,6 @@ class changeFinder():
         catalog = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1", modifier=planetary_computer.sign_inplace)    
 
         print(f"Searching for Sentinel-2 data in {year} ...")
-        if year == "2017":
-            year = "2016"
         # Define the search criteria
         search_criteria = {
             "collections": ["sentinel-2-l2a"],
