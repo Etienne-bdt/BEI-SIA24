@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torchvision.transforms.functional as TVF
 from torch.utils.data import Dataset
-from utils.index_calculation import NDVI, NDWI, NDBI, NDMI, BSI
+from index_calculation import NDVI, NDWI, NDBI, NDMI, BSI
 
 class CadastreSen2Dataset(Dataset):
     def __init__(self, image_path, transform=None):
@@ -194,11 +194,23 @@ class CadastreSen2Dataset(Dataset):
                 print(f"Path {path}/{patches} does not exist")
         self.data_list = data_list
 
+    def show_all(self):
+        for i in range(len(self.data_list)):
+            prefix = self.data_list[i]
+            before = np.load(f"{prefix}_before.npy")
+            after = np.load(f"{prefix}_after.npy")
+            plt.figure()
+            plt.subplot(121)
+            plt.imshow(before[0:3,...].transpose(1,2,0))
+            plt.subplot(122)
+            plt.imshow(after[0:3,...].transpose(1,2,0))
+            plt.savefig(f"{prefix}.png")
+            plt.close()
+
 
 if __name__ == "__main__":
     ds = CadastreSen2Dataset("./data/")
-    ds.create_patches(64)
+    #ds.create_patches(64)
     ds.load_patches()
-    print(len(ds))
-    ds.plot(2)
+    ds.show_all()
     
