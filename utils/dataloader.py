@@ -5,14 +5,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torchvision.transforms.functional as TVF
 from torch.utils.data import Dataset
-from index_calculation import NDVI, NDWI, NDBI, NDMI, BSI
+from utils.index_calculation import NDVI, NDWI, NDBI, NDMI, BSI
 
 class CadastreSen2Dataset(Dataset):
     def __init__(self, image_path, transform=None):
         self.impath = image_path
         self.transform = transform
         #Initialize the data list with the available data
-        #self.list_data()
+        self.list_data()
         self.load_patches()
 
     def list_data(self):
@@ -95,20 +95,18 @@ class CadastreSen2Dataset(Dataset):
             before  = np.load(os.path.join(self.impath, paths[0]))
             after = np.load(os.path.join(self.impath, paths[1]))
             (before, after) =  (self.normalize(before), self.normalize(after))
-            print(f"Before: {before.shape}, After: {after.shape}")
             print(f"Creating patches for {key}")
             NDVI_before, NDWI_before, NDBI_before, NDMI_before, BSI_before = NDVI(before), NDWI(before), NDBI(before), NDMI(before), BSI(before)
             NDVI_after, NDWI_after, NDBI_after, NDMI_after, BSI_after = NDVI(after), NDWI(after), NDBI(after), NDMI(after), BSI(after)
             before = np.concatenate([before, NDVI_before[np.newaxis,...], NDWI_before[np.newaxis,...], NDBI_before[np.newaxis,...], NDMI_before[np.newaxis,...], BSI_before[np.newaxis,...]], axis=0)
             after = np.concatenate([after, NDVI_after[np.newaxis,...], NDWI_after[np.newaxis,...], NDBI_after[np.newaxis,...], NDMI_after[np.newaxis,...], BSI_after[np.newaxis,...]], axis=0)
-            print(f"Before: {before.shape}, After: {after.shape}")
             house_mask = np.load(os.path.join(self.impath, f"{key}/houses_mask.npy"))
             house_mask = house_mask[np.newaxis,...]
             os.makedirs(os.path.join(self.impath, f"{key}/patches"), exist_ok=True)
             for i in range(0, before.shape[1], patch_size):
                 for j in range(0, before.shape[2], patch_size):
                     mask_patch = house_mask[:,i:i+patch_size,j:j+patch_size]
-                    if mask_patch.sum() > 64*64*0.05:
+                    if mask_patch.shape[1] == patch_size and mask_patch.shape[2] == patch_size and mask_patch.sum() > 64*64*0.05:
                         before_patch = before[:,i:i+patch_size,j:j+patch_size]
                         after_patch = after[:,i:i+patch_size,j:j+patch_size] 
                         np.save(os.path.join(self.impath, f"{key}/patches/{i}_{j}_before.npy"), before_patch)
@@ -149,11 +147,13 @@ class CadastreSen2Dataset(Dataset):
         if idx >= len(self.data_list):
             raise IndexError("Index out of bounds")
         
-        pb, pa, pm = self.data_list[idx]
+        path = self.data_list[idx]
+        pb = f"{path}_before.npy"
+        pa = f"{path}_after.npy"
+        pm = f"{path}_mask.npy"
         before  = np.load(pb)
         after = np.load(pa)
         house_mask = np.load(pm)
-        print(f"Before: {before.shape}, After: {after.shape}, Mask: {house_mask.shape}")
 
         if self.transform:
             before, after = self.transform(before, after)
@@ -177,17 +177,28 @@ class CadastreSen2Dataset(Dataset):
                     print(f"No numpy patches found in {patch}")
                 else:
                     #We have several patches with _before _after _mask, we need to group those with the same name {i}_{j} as one key in the dict or a list
-                    for p in range(0,len(patches),3):
-                        data_list.append((os.path.join(patch, patches[p+1]), os.path.join(patch, patches[p]), os.path.join(patch, patches[p+2])))
+                    prefixes = list(set([x.split("_")[0]+"_"+x.split("_")[1] for x in patches]))
+                    unique_prefixes = []
+                    for p in prefixes:
+                        if p in unique_prefixes:
+                            continue
+                        else:
+                            before = f"{p}_before.npy"
+                            after = f"{p}_after.npy"
+                            mask = f"{p}_mask.npy"
+                            if before in patches and after in patches and mask in patches:
+                                unique_prefixes.append(os.path.join(patch, p))
+                    data_list.extend(unique_prefixes)
+
             else:
                 print(f"Path {path}/{patches} does not exist")
         self.data_list = data_list
 
 
 if __name__ == "__main__":
-    ds = CadastreSen2Dataset("data/")
-    #ds.create_patches(64)
-    #ds.load_patches()
+    ds = CadastreSen2Dataset("./data/")
+    ds.create_patches(64)
+    ds.load_patches()
     print(len(ds))
     ds.plot(2)
     
